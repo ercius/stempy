@@ -2,6 +2,7 @@
 #include "image.h"
 #include "mask.h"
 #include "config.h"
+#include "h5cpp/h5readwrite.h"
 
 #include <vector>
 #include <fstream>
@@ -311,7 +312,7 @@ SectorStreamReader::~SectorStreamReader() {
 // unsigned int16 total_number_of_stem_y_positions_in_scan;
 // unsigned int16 stem_x_position_of_frame;
 // unsigned int16 stem_y_position_of_frame;
-Header SectorStreamReader::readHeader()
+Header SectorStreamReader::readHeader(std::ifstream& stream)
 {
 
   Header header;
@@ -323,7 +324,7 @@ Header SectorStreamReader::readHeader()
 
   // Read scan and frame number
   uint32_t headerNumbers[2];
-  read(headerNumbers, 2 * sizeof(uint32_t));
+  read(stream, headerNumbers, 2 * sizeof(uint32_t));
 
   int index = 0;
   header.scanNumber = headerNumbers[index++];
@@ -332,7 +333,7 @@ Header SectorStreamReader::readHeader()
   // Now read the size and positions
   uint16_t headerPositions[4];
   index = 0;
-  read(headerPositions, 4 * sizeof(uint16_t));
+  read(stream, headerPositions, 4 * sizeof(uint16_t));
 
   header.scanHeight = headerPositions[index++];
   header.scanWidth = headerPositions[index++];
@@ -344,6 +345,14 @@ Header SectorStreamReader::readHeader()
   header.imageNumbers.push_back(scanYPosition * header.scanWidth  + scanXPosition);
 
   return header;
+}
+
+Header SectorStreamReader::readHeader()
+{
+  auto &sectorStream = *m_streamsIterator;
+  auto &stream = sectorStream.stream;
+
+  return  readHeader(*stream.get());
 }
 
 istream & SectorStreamReader::skip(std::streamoff offset) {
@@ -366,9 +375,19 @@ istream & SectorStreamReader::read(T* value, streamsize size){
 
   auto &sectorStream = *m_streamsIterator;
   auto &stream = sectorStream.stream;
-  stream->read(reinterpret_cast<char*>(value), size);
 
-  return *stream;
+  return stream->read(reinterpret_cast<char*>(value), size);
+}
+
+
+template<typename T>
+  std::istream & SectorStreamReader::read(std::ifstream& stream, T& value) {
+    return read(stream, &value, sizeof(value));
+}
+
+template<typename T>
+  std::istream & SectorStreamReader::read(std::ifstream& stream, T* value, std::streamsize size) {
+    return stream.read(reinterpret_cast<char*>(value), size);
 }
 
  Block SectorStreamReader::read() {
@@ -472,50 +491,151 @@ void SectorStreamReader::reset() {
   m_streamsIterator = m_streams.begin();
 }
 
-float SectorStreamReader::dataCaptured() {
-  int numberOfSectors = 0;
+// float SectorStreamReader::dataCaptured() {
+//   int numberOfSectors = 0;
 
-  Header header;
+//   Header header;
 
-  try {
-    while(!m_streams.empty()) {
-      while(m_streamsIterator != m_streams.end()) {
-          auto &sectorStream = *m_streamsIterator;
-          auto &stream = sectorStream.stream;
-          auto c = stream->peek();
-          // If we have reached the end close the stream and remove if from
-          // the list.
-          if (c == EOF) {
-            stream->close();
-            m_streamsIterator = m_streams.erase(m_streamsIterator);
-            continue;
-          }
-          header = readHeader();
-          for(unsigned i = 0; i < header.imagesInBlock; i++) {
-            numberOfSectors++;
-          }
+//   try {
+//     while(!m_streams.empty()) {
+//       while(m_streamsIterator != m_streams.end()) {
+//           auto &sectorStream = *m_streamsIterator;
+//           auto &stream = sectorStream.stream;
+//           auto c = stream->peek();
+//           // If we have reached the end close the stream and remove if from
+//           // the list.
+//           if (c == EOF) {
+//             stream->close();
+//             m_streamsIterator = m_streams.erase(m_streamsIterator);
+//             continue;
+//           }
+//           header = readHeader();
+//           for(unsigned i = 0; i < header.imagesInBlock; i++) {
+//             numberOfSectors++;void toHdf5(const std::string& path);
+//           }
 
-          auto dataSize = header.frameWidth * header.frameHeight * header.imagesInBlock;
-          skip(dataSize*sizeof(uint16_t));
+//           auto dataSize = header.frameWidth * header.frameHeight * header.imagesInBlock;
+//           skip(dataSize*sizeof(uint16_t));
 
-          m_streamsIterator++;
-      }
-      // Start iterating from the beginning
-      if (!m_streams.empty()) {
-        m_streamsIterator = m_streams.begin();
-      }
+//           m_streamsIterator++;
+//       }
+//       // Start iterating from the beginning
+//       if (!m_streams.empty()) {
+//         m_streamsIterator = m_streams.begin();
+//       }
+//     }
+
+//     auto expectedNumberOfSectors = header.scanWidth*header.scanHeight*4;
+
+//     // Rest so we are ready to read again
+//     reset();
+
+//     return static_cast<float>(numberOfSectors)/expectedNumberOfSectors;
+
+//   } catch (EofException& e) {
+//     throw invalid_argument("Unexpected EOF while processing stream.");
+//   }
+// }
+
+template <typename Functor>
+void SectorStreamReader::readAll(Functor func) {
+  for(auto& file: m_files) {
+    std::ifstream stream;
+    stream.open(file, ios::in | ios::binary);
+    if (!stream.is_open()) {
+      ostringstream msg;
+      msg << "Unable to open file: " << file;
+      throw invalid_argument(msg.str());
     }
 
-    auto expectedNumberOfSectors = header.scanWidth*header.scanHeight*4;
+    auto sector = extractSector(file);
 
-    // Rest so we are ready to read again
-    reset();
+    while(true) {
+      // Check if we are done
+      auto c = stream.peek();
+      if (c == EOF) {
+        stream.close();
+        break;
+      }
+      auto header = readHeader(stream);
+      auto skip = [&stream, &header]() {
+        auto dataSize = header.frameWidth * header.frameHeight * header.imagesInBlock;
+        stream.seekg(dataSize*sizeof(uint16_t), stream.cur);
+      };
 
-    return static_cast<float>(numberOfSectors)/expectedNumberOfSectors;
+      auto block = [&stream, &header]() -> Block {
+        Block b(header);
+        auto dataSize = header.frameWidth * header.frameHeight * header.imagesInBlock;
+        stream.read(reinterpret_cast<char*>(b.data.get()), dataSize * sizeof(uint16_t));
 
-  } catch (EofException& e) {
-    throw invalid_argument("Unexpected EOF while processing stream.");
+        return b;
+      };
+
+      func(sector, header, skip, block);
+    }
   }
+}
+
+float SectorStreamReader::dataCaptured() {
+  uint64_t numberOfSectors = 0;
+  uint32_t scanWidth;
+  uint32_t scanHeight;
+
+  auto func = [&numberOfSectors, &scanWidth, &scanHeight](int sector, Header& header,
+    auto& skip, auto& block) {
+    numberOfSectors++;
+    scanWidth = header.scanWidth;
+    scanHeight = header.scanHeight;
+    skip();
+  };
+
+  readAll(func);
+
+  auto expectedNumberOfSectors = scanWidth*scanHeight*4;
+
+  return static_cast<float>(numberOfSectors) / expectedNumberOfSectors;
+}
+
+void SectorStreamReader::toHdf5(const std::string& path) {
+  h5::H5ReadWrite::OpenMode mode = h5::H5ReadWrite::OpenMode::WriteOnly;
+  h5::H5ReadWrite writer(path.c_str(), mode);
+
+  std::vector<int> dims = {64*65, FRAME_WIDTH, FRAME_WIDTH};
+  std::vector<int> chunkDims = {1, FRAME_WIDTH, FRAME_HEIGHT};
+  writer.createDataSet("/", "frames", dims, h5::H5ReadWrite::DataType::UInt16, chunkDims);
+
+  auto func = [&writer](int sector, Header& header,
+    auto& skip, auto& block) {
+
+      auto b = block();
+      auto frameX = sector * SECTOR_WIDTH;
+      for(unsigned i=0; i<b.header.imagesInBlock; i++) {
+        auto pos = b.header.imageNumbers[0];
+        auto offset = i * FRAME_WIDTH * FRAME_HEIGHT;
+        size_t start[3] = {pos, 0, sector*SECTOR_WIDTH};
+        size_t counts[3] = {1, header.frameHeight, header.frameWidth};
+
+        auto data = b.data.get();
+        if(!writer.updateData("/frames", h5::H5ReadWrite::DataType::UInt16, data,
+                          start, counts)) {
+                            throw std::runtime_error("Unable to update HDF5.");
+                          }
+
+        /*for (unsigned frameY = 0; frameY < FRAME_HEIGHT; frameY++) {
+          start[1] = frameY;
+          auto data = b.data.get() + offset + frameY * header.frameWidth;
+          writer.updateData("/frames", h5::H5ReadWrite::DataType::UInt16, data,
+                  start, counts);
+        }*/
+      }
+      //writer.updateData("/frames", h5::H5ReadWrite::DataType::UInt16, data,
+      //          start, counts);
+
+
+  };
+
+  readAll(func);
+
 }
 
 }
