@@ -373,6 +373,7 @@ def electron_count(reader, darkreference, number_of_samples=40,
 
     return electron_counted_data
 
+
 def radial_sum(reader, center=(-1, -1), scan_dimensions=(0, 0)):
     """Generate a radial sum from which STEM images can be generated.
 
@@ -392,7 +393,7 @@ def radial_sum(reader, center=(-1, -1), scan_dimensions=(0, 0)):
     :rtype: numpy.ndarray
     """
 
-    sum =  _image.radial_sum(reader.begin(), reader.end(), scan_dimensions,
+    sum = _image.radial_sum(reader.begin(), reader.end(), scan_dimensions,
                              center)
 
     return np.array(sum, copy=False)
@@ -421,25 +422,42 @@ def maximum_diffraction_pattern(reader, darkreference=None):
     return img
 
 
-def com_sparse(electron_counts, frame_dimensions):
+def com_sparse(electron_counts, frame_dimensions=(576, 576), scan_dimensions=None):
     """Compute center of mass for counted data directly from sparse (single)
-        electron data.
+        electron data. If no data is found for a frame then the frame_center is used which defaults to the middle of
+        the frame_dimensions.
 
         :param electron_counts: A vector of electron positions flattened. Each
                                 pixel can only be a 1 (electron) or a 0
                                 (no electron).
-        :type electron_counts: numpy.ndarray (1D)
+        :type electron_counts: numpy.ndarray (1D) or stempy.electron_counted_dataset
         :param frame_dimensions: The shape of the detector.
         :type frame_dimensions: tuple of ints of length 2
+        :param scan_dimensions: The shape of the STEM scan.
+        :type scan_dimensions: tuple of ints of length 2
 
-        :return: The center of mass in X and Y for each scan position. If a position
-                has no data (len(electron_counts) == 0) then the center of the
+        :return: The center of mass in X and Y for each scan position. If a scan position [m]
+                has no data (len(electron_counts[m]) == 0) then the center of the
                 frame is used as the center of mass.
         :rtype: numpy.ndarray (2D)
-        """
+    """
+    # Electron counted data attributes
+    ecd_attrs = ['data', 'scan_dimensions', 'frame_dimensions']
+
+    if all([hasattr(input, x) for x in ecd_attrs]):
+        # Handle electron counted dataset type
+        frame_dimensions = electron_counts.frame_dimensions
+        scan_dimensions = electron_counts.scan_dimensions[::-1]
+        data = electron_counts.data
+    elif isinstance(electron_counts, np.ndarray):
+        data = electron_counts
+        if not scan_dimensions:
+            print('Scan dimensions required for ndarray input.')
+            return None
+
     frame_center = [int(ii/2)-1 for ii in frame_dimensions]
-    com = np.zeros((2, len(electron_counts)), 'f')
-    for ii, ev in enumerate(electron_counts):
+    com = np.zeros((2, len(data)), 'f')
+    for ii, ev in enumerate(data):
         if len(ev) > 0:
             x, y = np.unravel_index(ev, frame_dimensions)
             mm = len(ev)
@@ -448,6 +466,9 @@ def com_sparse(electron_counts, frame_dimensions):
             com[:, ii] = (com_y, com_x)
         else:
             com[:, ii] = frame_center
+
+    com = com.reshape((2, *scan_dimensions))
+
     return com
 
 
