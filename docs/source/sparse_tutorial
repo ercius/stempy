@@ -1,0 +1,100 @@
+Sparse data tutorial
+====================
+
+The data output by the stempy counting code is a sparse data type stored in an HDF5 file. Here we describe sparse data
+storage concepts, the type of sparse layout used in stempy, why we do this, and how to read/interact with the data.
+
+Dense data arrays
+-----------------
+Typically, data is stored in arrays such as the numpy.ndarray format which has one intensity value on a set of
+grid points which can be multidimensional. In electron mnicroscpy, the most common type of data is an image stored
+as a two-dimensional array of values. 
+
+Assume you have a (tiny) image detector with only 3x3 pixels. It would look like this if you had a series of integer
+values stored in this array.
+
+| 1     | 4   | 7   |
+|-------|-----|-----|
+| **2** | **5** | **8**   |
+| **3**     | **6**   | **9**   |
+
+In numpy, if you asked for the first element of this array you would write `array[0, 0]` which would return the value 1.
+This is what is called a "dense array" where every element in the array is associated with a value. This array would
+require `3 * 3 = 9` elements in your computer memory to represent.
+
+In computer memory, arrays are actually stored as a single one-dimensional array of values like this.
+
+| 1   | 4   | 7   | 2   | 5   | 8   | 3   | 6   | 9   |
+|-----|-----|-----|-----|-----|-----|-----|-----|-----|
+
+The array is then interpreted as two-dimensional (or higher) by numpy in the background when you use elements
+in the array. If you ask for element `[n, m]` numpy retrieve element `n * 3 + m * 3` where `n` and `m` are the width
+and height of the array. 
+
+Sparse data array representations
+---------------------------------
+Now, lets say that you only had 1 electron hit the detector in the center and the
+detector can only count electrons (i.e no noise). The array to represent this would look like
+
+| 0   | 0   | 0   |
+|-----|-----|-----|
+| **0**   | **1**   | **0**   |
+| **0**   | **0**   | **0**   |
+
+If you retrieved the middle element `array[1, 1]` it would return 5. All other elements are 0. This array still requires
+`3 * 3 = 9` elements in computer memory to represent. If you can assume that only 1 electron will hit the detector in
+any given frame then you can actually only store the *position* of the electron in the array (only 1 element) and ignore
+all of the zeros. In this case you only have to store one element (9x less data than the dense version) corresponding to
+the element occupied by the electron. In the above case this would be element `[1, 1]` in the array. 
+
+Storing only the non-zero values in an array is known as a sparse array. One common form of a sparse array allows for 
+each element of the array to be associated with a value. Here we show a 4x4 array with a few non-zero elements which 
+requires `4 * 4 = 16` memory elements to store.
+
+| 4   | 0   | 0   | 0   |
+|-----|-----|-----|-----|
+| 0   | 0   | 0   | 0   |
+| 0   | 0   | 7   | 0   |
+| 0   | 9   | 0   | 0   |
+
+We can instead represent this by a list of values with three columns: x, y, value:
+
+| x   | y   | value |
+|-----|-----|-------|
+| 0   | 0   | 4     |
+| 2   | 2   | 7     |
+| 3   | 1   | 9     |
+
+This requires 3 elements per non-zero array element which in this case is 9 elements. This is 44% less memory required.
+So, we have achieved a very large compression of our data without _any_ loss of data.
+
+In the case of data from electron counting detectors (like the 4D Camera or the Gatan K3) we can make 1 more assumption
+that each element in the image array can only be 1 (an electron strike) or 0 (no electron strike). Our array then 
+looks like this
+
+| 1   | 0   | 0   | 0   |
+|-----|-----|-----|-----|
+| 0   | 0   | 0   | 0   |
+| 0   | 0   | 1   | 0   |
+| 0   | 1   | 0   | 0   |
+
+We can now compress the data even more by only storing the position of a non-zero value. From earlier we know that in 
+computer memory a two-dimensional array is stored as a one-dimensional set of values. Our array above is actually 
+stored as
+
+| 1   | 0   | 0   | 0   | 0   | 0   | 0   | 0   | 0   | 0   | 1   | 0   | 0   | 0   | 0   | 1   | 0   | 0   |
+|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|-----|
+
+Since we only have the possibility of an array element being 1 (an electron strike) or 9 (no electron) our sparse array
+is then just one column of values corresponding to the one-dimensional position of the electron strike.
+
+| 0      |
+|--------|
+| **10** |
+| **13** |
+
+We thus only need to store three values which is an 81% reduction is the memory requirements. This is the same type of
+data storage we use for the sparse arrays in stempy. The electron strikes are stored as a one-dimensional list of the 
+positions of electron strikes for each detector frame.
+
+Multi-dimensional 
