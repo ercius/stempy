@@ -88,13 +88,37 @@ stored as
 Since we only have the possibility of an array element being 1 (an electron strike) or 9 (no electron) our sparse array
 is then just one column of values corresponding to the one-dimensional position of the electron strike.
 
-| 0      |
-|--------|
-| **10** |
-| **13** |
+| 0      | 10 | 13 | 
+|--------|----|----|
 
 We thus only need to store three values which is an 81% reduction is the memory requirements. This is the same type of
 data storage we use for the sparse arrays in stempy. The electron strikes are stored as a one-dimensional list of the 
 positions of electron strikes for each detector frame.
 
-Multi-dimensional 
+Multi-dimensional sparse arrays
+-------------------------------
+
+The two-dimensional example in the previous section provides the basis for how to think about sparse multi-dimensional 
+data sets such as the four-dimensional data acquired in 4D-STEM (scanning nano-diffraction). In the case of 4D-STEM
+data we have a set of sparse detector frames that were acquired on a two-dimensional grid of probe positions. Each
+frame is represented by a list of electron strike locations in order to minimize the amount of data stored.
+
+Each detector frames does not necessarily have the same number of electron strikes though. So, each list of electron
+strikes will have a different length (i.e. # of electrons). This leads to what is called a "ragged array" where 
+one dimension of the array is not always the same length. Stempy's sparse 4D-STEM data is thus stored as a ragged 
+array which looks similar to the following
+
+| 0   | 10 | 13 | 
+|-----|----|----|
+
+| 1   | 8    | 11  | 14  | 
+|-----|------|-----|-----|
+
+| 5   | 8   | 
+|-----|-----|
+
+| 1   | 4   | 7   | 10  | 12 | 
+|-----|-----|-----|-----|----|
+
+Each row above represents the electron strike locations for each frame. In this very simple example we only have 4
+frames (or scan positions) which is a 2x2 4D-STEM scan.
